@@ -5,7 +5,7 @@ from . import schemas
 from .database import get_db_connection
 from fastapi.security import OAuth2PasswordRequestForm
 from . import oauth2, utils
-from .Routers import auth,menus,booking,notice,users
+from .Routers import auth,menus,booking,notice,users,meallist
 
 # Create an instance of the FastAPI application
 app = FastAPI()
@@ -15,3 +15,4 @@ app.include_router(menus.router)
 app.include_router(booking.router)
 app.include_router(notice.router)
 app.include_router(users.router)
+app.include_router(meallist.router)
