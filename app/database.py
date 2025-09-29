@@ -1,31 +1,27 @@
-import psycopg2 # type: ignore
-from psycopg2.pool import SimpleConnectionPool # type: ignore
-from psycopg2.extras import RealDictCursor # type: ignore
-import time
+import psycopg2
+from psycopg2.pool import SimpleConnectionPool
+import os # Import the 'os' module to read environment variables
 
+DB_NAME = os.getenv("DB_NAME", "hosteldb")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "yourpassword") # Replace with your local password
+DB_HOST = os.getenv("DB_HOST", "localhost")
 
-DB_NAME = "hosteldb"
-DB_USER = "postgres"
-DB_HOST = "localhost"
-DB_PASSWORD = "1234"
-
+# Define the connection string using the variables above
 dsn = f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} host={DB_HOST}"
 
+# This part remains the same
+pool = SimpleConnectionPool(minconn=1, maxconn=10, dsn=dsn)
+print("Database connection pool created.")
 
-#create a pool
-pool = SimpleConnectionPool(minconn=1,maxconn=60,dsn=dsn)
-
-
-
-#establish connection
 def get_db_connection():
     conn = None
     try:
         conn = pool.getconn()
-        # RealDictCursor makes the database return a dictionary-like object
-        conn.cursor_factory = RealDictCursor
+        conn.cursor_factory = psycopg2.extras.RealDictCursor # type: ignore
         yield conn
     finally:
         if conn:
             pool.putconn(conn)
+
 
