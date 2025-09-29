@@ -1,26 +1,22 @@
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-import os # Import the 'os' module to read environment variables
+import os
 
-DB_NAME = os.getenv("DB_NAME", "hosteldb")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "1234") 
-DB_HOST = os.getenv("DB_HOST", "localhost")
+# Supabase gives you DATABASE_URL (set it in Render's environment variables)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Define the connection string using the variables above
-dsn = f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} host={DB_HOST}"
+if not DATABASE_URL:
+    raise Exception("DATABASE_URL environment variable not set!")
 
-pool = SimpleConnectionPool(minconn=1, maxconn=15, dsn=dsn)
+# Create connection pool
+pool = SimpleConnectionPool(minconn=1, maxconn=15, dsn=DATABASE_URL)
 print("Database connection pool created.")
 
 def get_db_connection():
     conn = None
     try:
         conn = pool.getconn()
-        conn.cursor_factory = psycopg2.extras.RealDictCursor # type: ignore
         yield conn
     finally:
         if conn:
             pool.putconn(conn)
-
-
