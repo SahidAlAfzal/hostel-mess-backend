@@ -4,7 +4,7 @@ import os # Import the 'os' module to read environment variables
 
 DB_NAME = os.getenv("DB_NAME", "hosteldb")
 DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "yourpassword") # Replace with your local password
+DB_PASSWORD = os.getenv("DB_PASSWORD", "1234") 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 
 # Define the connection string using the variables above
