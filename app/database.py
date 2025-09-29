@@ -10,7 +10,6 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 # Define the connection string using the variables above
 dsn = f"dbname={DB_NAME} user={DB_USER} password={DB_PASSWORD} host={DB_HOST}"
 
-# This part remains the same
 pool = SimpleConnectionPool(minconn=1, maxconn=10, dsn=dsn)
 print("Database connection pool created.")
 
