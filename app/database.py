@@ -1,5 +1,6 @@
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
+from psycopg2.extras import RealDictCursor # Import this helper
 import os
 
 # Supabase gives you DATABASE_URL (set it in Render's environment variables)
@@ -25,7 +26,12 @@ def get_db_connection():
     conn = None
     try:
         conn = pool.getconn()
+        # --- THIS IS THE CRITICAL FIX ---
+        # This line tells every cursor created from this connection
+        # to return rows as dictionary-like objects, solving the TypeError.
+        conn.cursor_factory = RealDictCursor
         yield conn
     finally:
         if conn:
             pool.putconn(conn)
+
