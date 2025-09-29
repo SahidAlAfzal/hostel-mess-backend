@@ -7,7 +7,7 @@ import os
 MAIL_FROM = os.getenv("MAIL_FROM", "default@example.com") 
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
-async def send_verification_email(email: EmailStr, name: str, token: str):
+def send_verification_email(email: EmailStr, name: str, token: str):
     """
     Sends the account verification email to a new user using SendGrid.
     """
@@ -30,12 +30,12 @@ async def send_verification_email(email: EmailStr, name: str, token: str):
     )
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
-        await sg.send(message)
+        sg.send(message)
     except Exception as e:
         print(f"Error sending email via SendGrid: {e}")
     
 
-async def send_password_reset_email(email: EmailStr, name: str, token: str):
+def send_password_reset_email(email: EmailStr, name: str, token: str):
     """
     Sends the password reset email to a user.
     """
@@ -68,7 +68,7 @@ async def send_password_reset_email(email: EmailStr, name: str, token: str):
     )
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
-        await sg.send(message)
+        sg.send(message)
         print(f"Password reset email sent to {email}.")
     except Exception as e:
         print(f"FATAL: Error sending password reset email via SendGrid: {e}")
