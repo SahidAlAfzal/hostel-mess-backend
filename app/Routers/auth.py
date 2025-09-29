@@ -149,7 +149,7 @@ def forgot_password(request: schemas.PasswordResetRequest, background_tasks: Bac
         )
         # Send the email in the background
         background_tasks.add_task(
-            send_email.send_password_reset_email, user['email'], user['name'], password_reset_token # type: ignore
+            send_password_reset_email, user['email'], user['name'], password_reset_token # type: ignore
         )
 
     return {"message": "If an account with that email exists, a password reset email has been sent."}
