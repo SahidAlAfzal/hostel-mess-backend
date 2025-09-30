@@ -102,6 +102,22 @@ def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(ge
 
     return new_booking
 
+#-----------------------------------------------------GET MY BOOKINGS-------------------------------------------------------#
+@router.get("/me",response_model=List[schemas.MyBookingHistoryItem])
+def get_my_bookings(conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
+    user_id = current_user['id']
+    query = "SELECT booking_date,lunch_pick, dinner_pick,created_at FROM meal_bookings WHERE user_id = %s ORDER BY booking_date DESC;"
+    
+    with conn.cursor() as c:
+        c.execute(query,(user_id,))
+        meal_history = c.fetchall()
+
+    if not meal_history:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="You have no bookings!")
+    
+    return meal_history
+
+
 
 
 #-----------------------------------------------------DELETE BOOKING----------------------------------------------------------#
