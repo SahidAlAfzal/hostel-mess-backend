@@ -6,9 +6,19 @@ from .database import get_db_connection
 from fastapi.security import OAuth2PasswordRequestForm
 from . import oauth2, utils
 from .Routers import auth,menus,booking,notice,users,meallist
+from fastapi.middleware.cors import CORSMiddleware
 
 # Create an instance of the FastAPI application
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Accept requests from any domain/IP
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 app.include_router(auth.router)
 app.include_router(menus.router)
