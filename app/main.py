@@ -1,4 +1,4 @@
-from fastapi import FastAPI,Depends,status,HTTPException,APIRouter
+from fastapi import FastAPI,Depends,status,HTTPException,APIRouter,Response
 from psycopg2.errors import UniqueViolation # type: ignore
 import psycopg2 # type: ignore
 from . import schemas
@@ -30,19 +30,19 @@ app.include_router(meallist.router)
 
 
 # A simple root endpoint
-@app.get("/")
+@app.get("/",tags=["Testing"])
 def root():
     return {"message": "Welcome to the Hostel Management API. The service is running."}
 
 
 #------------------------------------NEW HEALTH CHECK ENDPOINT-------------------------------------#
-@app.get("/health", status_code=status.HTTP_200_OK)
+@app.head("/health", status_code=status.HTTP_200_OK,tags=["Testing"])
 def health_check(conn=Depends(get_db_connection)):
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
             cur.fetchone()
-        return {"status": "ok", "database": "connected"}
+        return Response(status_code=status.HTTP_200_OK)
     
     except Exception as e:
         # If the database connection fails, this will raise a server error,
