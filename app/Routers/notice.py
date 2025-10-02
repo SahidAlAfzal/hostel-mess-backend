@@ -55,7 +55,7 @@ def delete_notice(notice_id: int,conn = Depends(database.get_db_connection),curr
     postman_id = postman['posted_by_user_id']
 
     if current_user['role'] == 'convenor' and postman_id != current_user['id']:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="You can't delete this notice!")
     
 
     query = "DELETE FROM notices WHERE id=%s"
