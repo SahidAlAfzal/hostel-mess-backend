@@ -2,37 +2,55 @@ import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from psycopg2.extras import RealDictCursor
 import os
+import time
 
-# Read the DATABASE_URL from environment variables for deployment.
+# --- DATABASE_URL Setup ---
+# This robustly handles both production (Render) and local environments.
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-# If the DATABASE_URL is not set (e.g., when running locally),
-# build it from individual parts as a fallback.
-if DATABASE_URL is None:
+if not DATABASE_URL:
     print("DATABASE_URL not found, falling back to local development settings.")
-    DB_NAME = os.getenv("DB_NAME", "hosteldb")
+    # You can set these in your local .env or here as defaults
     DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "yourpassword") # Replace with your local password
+    DB_PASSWORD = os.getenv("DB_PASSWORD", "yourpassword") # IMPORTANT: Use your local password here
     DB_HOST = os.getenv("DB_HOST", "localhost")
+    DB_NAME = os.getenv("DB_NAME", "hosteldb")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DATABASE_URL = f"postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# Create the connection pool directly when the application starts.
-# If the database is cold, this is the point where the deployment might fail.
-pool = SimpleConnectionPool(minconn=1, maxconn=20, dsn=DATABASE_URL)
-print("Database connection pool created.")
+# --- Initial Pool Creation with Retry Logic ---
+# This function makes your application resilient to database cold starts during deployment.
+def create_pool():
+    retries, delay = 5, 2
+    for i in range(retries):
+        try:
+            pool = SimpleConnectionPool(minconn=1, maxconn=20, dsn=DATABASE_URL)
+            print("Database connection pool created successfully.")
+            return pool
+        except psycopg2.OperationalError as e:
+            print(f"Initial pool connection attempt {i+1} failed: {e}")
+            if i < retries - 1:
+                print(f"Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                print("FATAL: Could not create database pool after multiple retries.")
+                raise e
 
-# This is the standard function to get a connection for each API request.
+# Create the pool when the application starts.
+pool = create_pool()
+
+# --- FastAPI Dependency for Getting a Connection ---
+# This is the correct pattern using 'yield' that works with Depends().
 def get_db_connection():
+    """
+    FastAPI dependency that yields a database connection from the pool.
+    """
     conn = None
     try:
-        # Get a connection from the pool.
-        conn = pool.getconn()
+        conn = pool.getconn() # type: ignore
         conn.cursor_factory = RealDictCursor
-        # Yield the connection to the endpoint.
         yield conn
     finally:
-        # This block always runs, ensuring the connection is returned to the pool.
         if conn:
-            pool.putconn(conn)
+            pool.putconn(conn) # type: ignore
+    
 
