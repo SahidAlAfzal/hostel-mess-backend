@@ -19,6 +19,7 @@ class UserOut(BaseModel):
     name: str
     email: EmailStr
     room_number: int
+    role : str
     created_at: datetime
 
     class Config:
