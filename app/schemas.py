@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     email: EmailStr
     room_number: int
     role : str
+    is_mess_active: bool
     created_at: datetime
 
     class Config:
@@ -143,8 +144,10 @@ class PasswordReset(BaseModel):
     
 
 
-
-
+#-----------------------------Update Mess Meal Status---------------------------#
+# For the Mess Committee to update a user's status
+class UserMessStatusUpdate(BaseModel):
+    is_mess_active: bool
 
 
 

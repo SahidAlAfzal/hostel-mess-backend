@@ -47,6 +47,11 @@ def validate_booking_time(booking_date: date):
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.MealBookingOut)
 def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
+    #Check mess is off or not
+    if not current_user['is_mess_active']:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="Your Mess is off!! Please contact mess committee")
+    
+
     #CHECK FOR time logic
     validate_booking_time(booking.booking_date)
 

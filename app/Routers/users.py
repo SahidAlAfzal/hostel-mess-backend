@@ -78,4 +78,25 @@ def delete_user(user_id : int, conn = Depends(get_db_connection),current_user: d
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+#----------------------------------------------------UPDATE MESS STATUS------------------------------------------------------#
+@router.patch("/{user_id}/mess-status",response_model=schemas.UserOut)
+def update_mess_status(user_id: int, status_update: schemas.UserMessStatusUpdate, conn = Depends(get_db_connection), current_user: dict = Depends(oauth2.require_mess_committee_role)):
+
+    query = """UPDATE users SET is_mess_active=%s WHERE id=%s
+    returning id, name, email, room_number, role, is_mess_active, created_at;
+    """
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query,(status_update,user_id))
+            updated_user = cur.fetchone()
+
+            if not updated_user:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail=f"User with id {user_id} is Not Found!")
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Database error : {e}")
     
+    return updated_user
+
