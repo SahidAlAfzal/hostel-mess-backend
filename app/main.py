@@ -30,24 +30,6 @@ app.include_router(meallist.router)
 
 
 # A simple root endpoint
-@app.get("/",tags=["Testing"])
+@app.head("/",tags=["Testing"])
 def root():
     return {"message": "Welcome to the Hostel Management API. The service is running."}
-
-
-#------------------------------------NEW HEALTH CHECK ENDPOINT-------------------------------------#
-@app.head("/health", status_code=status.HTTP_200_OK,tags=["Testing"])
-def health_check(conn=Depends(get_db_connection)):
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        return Response(status_code=status.HTTP_200_OK)
-    
-    except Exception as e:
-        # If the database connection fails, this will raise a server error,
-        # which will correctly signal to UptimeRobot that the service is down.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database connection error: {e}"
-        )
