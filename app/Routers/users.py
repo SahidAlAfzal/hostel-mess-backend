@@ -98,7 +98,7 @@ def update_mess_status(user_id: int, status_update: schemas.UserMessStatusUpdate
 
     try:
         with conn.cursor() as cur:
-            cur.execute(query,(status_update,user_id))
+            cur.execute(query,(status_update.is_mess_active,user_id))
             updated_user = cur.fetchone()
 
             if not updated_user:
