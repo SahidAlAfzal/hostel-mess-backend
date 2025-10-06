@@ -11,13 +11,14 @@ router = APIRouter(prefix='/notices',tags=['Notices'])
 @router.post("/",status_code=status.HTTP_201_CREATED,response_model=schemas.NoticeOut)
 def create_notice(notice:schemas.NoticeCreate,conn = Depends(database.get_db_connection),current_user = Depends(oauth2.require_admin_role)):
     query = """
-        INSERT INTO notices (title, content, posted_by_user_id)
-        VALUES (%(title)s, %(content)s, %(user_id)s)
-        RETURNING id, title, content, posted_by_user_id, created_at;
+        INSERT INTO notices (title, content, posted_by_user_id, name)
+        VALUES (%(title)s, %(content)s, %(user_id)s, %(name)s)
+        RETURNING id, title, content, name ,posted_by_user_id, created_at;
     """
 
     params = notice.model_dump()
     params['user_id'] = current_user['id']
+    params['name'] = current_user['name']
 
     try:
         with conn.cursor() as c:

@@ -91,6 +91,7 @@ class NoticeOut(BaseModel):
     id: int
     title: str
     content: str
+    name: str
     posted_by_user_id: int
     created_at: datetime
 
