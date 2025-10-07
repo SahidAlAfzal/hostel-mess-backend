@@ -1,5 +1,5 @@
 from jose import JWTError,jwt
-from datetime import datetime,timedelta
+from datetime import datetime,timedelta,timezone
 from fastapi import Depends,HTTPException,status
 from typing import Optional
 from . import schemas,database
@@ -18,9 +18,9 @@ def create_access_token(data:dict, expire_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     #expire = datetime.now() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     if expire_delta:
-        expire = datetime.now() + expire_delta
+        expire = datetime.now(timezone.utc) + expire_delta
     else:
-        expire = datetime.now() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+        expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
 
     to_encode.update({"exp":expire})
 
