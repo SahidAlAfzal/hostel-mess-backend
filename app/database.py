@@ -23,7 +23,7 @@ def create_pool():
     retries, delay = 5, 2
     for i in range(retries):
         try:
-            pool = SimpleConnectionPool(minconn=1, maxconn=20, dsn=DATABASE_URL)
+            pool = SimpleConnectionPool(minconn=1, maxconn=40, dsn=DATABASE_URL)
             print("Database connection pool created successfully.")
             return pool
         except psycopg2.OperationalError as e:
