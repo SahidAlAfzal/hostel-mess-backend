@@ -2,26 +2,23 @@ import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from psycopg2.extras import RealDictCursor
 import os
-import time 
+import time # Import the 'time' module
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-if DATABASE_URL is None:
-    print("DATABASE_URL not found, falling back to local development settings.")
-    DB_NAME = os.getenv("DB_NAME", "hosteldb")
+if not DATABASE_URL:
+    print("DATABASE_URL not found, falling back to local dev.")
     DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "1234") # Replace with your local password
+    DB_PASSWORD = os.getenv("DB_PASSWORD", "1234")
     DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DATABASE_URL = f"postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    DB_NAME = os.getenv("DB_NAME", "hosteldb")
+    DATABASE_URL = f"postgres://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}"
 
 # A function to create the pool with retry logic for startup.
 def create_pool():
-    retries = 5
-    delay = 2 # seconds
+    retries, delay = 5, 2
     for i in range(retries):
         try:
-            pool = SimpleConnectionPool(minconn=1, maxconn=20, dsn=DATABASE_URL)
+            pool = SimpleConnectionPool(minconn=1, maxconn=40, dsn=DATABASE_URL)
             print("Database connection pool created successfully.")
             return pool
         except psycopg2.OperationalError as e:
@@ -33,35 +30,35 @@ def create_pool():
                 print("FATAL: Could not create database pool after multiple retries.")
                 raise e
 
-#function to create the pool.
 pool = create_pool()
 
-# --- THIS IS THE RESILIENT FUNCTION ---
+# --- FastAPI Dependency with Runtime Retry Logic ---
 def get_db_connection():
     """
-    Gets a connection from the pool. Includes a retry mechanism to handle
-    database cold starts and abrupt connection closures on free-tier services.
+    FastAPI dependency that yields a database connection from the pool.
+    Includes retry logic to handle idle connection timeouts.
     """
     retries = 3
-    delay = 1 # seconds
+    delay = 1
     for i in range(retries):
         try:
             conn = pool.getconn() # type: ignore
+            # Test the connection with a simple query before yielding it
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            
             conn.cursor_factory = RealDictCursor
             try:
-                # Yield the connection to the endpoint
                 yield conn
+                # If we get here, the request was successful, so we break the loop
+                break 
             finally:
-                # This block always runs, ensuring the connection is returned to the pool
                 pool.putconn(conn) # type: ignore
-            # If we get here, the connection was successful and returned, so we exit the function
-            return
-        except psycopg2.Error as e: # Catching a broader range of psycopg2 errors
-            print(f"Database connection attempt {i + 1} of {retries} failed: {e}")
+        except (psycopg2.InterfaceError, psycopg2.OperationalError) as e:
+            print(f"Database connection error: {e}. Attempt {i+1} of {retries}.")
             if i < retries - 1:
-                print(f"Database might be waking up. Retrying in {delay} second(s)...")
+                print(f"Retrying in {delay} second(s)...")
                 time.sleep(delay)
             else:
-                # If we're out of retries, raise the final exception
-                print("Database connection failed after multiple retries.")
+                print("FATAL: Database connection failed after multiple retries.")
                 raise e
