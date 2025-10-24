@@ -1,7 +1,8 @@
-from fastapi import APIRouter,Depends,HTTPException,status,Response
+from fastapi import APIRouter,Depends,HTTPException,status,Response,BackgroundTasks
 from .. import database,schemas,oauth2
 import psycopg2
 from typing import List
+from .. import fcm_manager
 
 router = APIRouter(prefix='/notices',tags=['Notices'])
 
@@ -9,7 +10,7 @@ router = APIRouter(prefix='/notices',tags=['Notices'])
 
 #----------------------------------------------------------POST NOTICE-------------------------------------------------------------#
 @router.post("/",status_code=status.HTTP_201_CREATED,response_model=schemas.NoticeOut)
-def create_notice(notice:schemas.NoticeCreate,conn = Depends(database.get_db_connection),current_user = Depends(oauth2.require_admin_role)):
+def create_notice(notice:schemas.NoticeCreate,background_tasks: BackgroundTasks, conn = Depends(database.get_db_connection), current_user = Depends(oauth2.require_admin_role)):
     query = """
         INSERT INTO notices (title, content, posted_by_user_id, name)
         VALUES (%(title)s, %(content)s, %(user_id)s, %(name)s)
@@ -28,6 +29,13 @@ def create_notice(notice:schemas.NoticeCreate,conn = Depends(database.get_db_con
     except Exception as e:
         conn.rollback()
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Database Error: {e}")
+    
+    # After the notice is created, send a notification to all users.
+    notification_title = f"New Notice: {new_notice['title']}"
+    notification_body = new_notice['content'][:120] # Send the first 120 chars
+    background_tasks.add_task(
+        fcm_manager.send_notification_to_all, notification_title, notification_body
+    )
     
     return new_notice
 

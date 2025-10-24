@@ -153,3 +153,13 @@ class UserMessStatusUpdate(BaseModel):
 
 
 
+#-----------------------------Push Notification Token---------------------------#
+# Schema for the mobile app to send its push token
+class PushTokenUpdate(BaseModel):
+    token: str
+
+
+# Schema for an admin to send a notification (for the manual send endpoint)
+class NotificationCreate(BaseModel):
+    title: str
+    message: str
