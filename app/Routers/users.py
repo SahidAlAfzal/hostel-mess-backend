@@ -109,23 +109,3 @@ def update_mess_status(user_id: int, status_update: schemas.UserMessStatusUpdate
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Database error : {e}")
     
     return updated_user
-
-#---------------------------------UPDATE PROFILE---------------------------------#
-@router.patch("/me",response_model=schemas.UpdatedUserOut)
-def update_user(updated_user: schemas.UpdatedUserIn, conn = Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
-    query = "UPDATE users SET name=%s, room_number=%s WHERE id=%s RETURNING id, name, room_number;"
-    
-    try:
-        with conn.cursor() as c:
-            c.execute(query,(updated_user.name, updated_user.room_number, current_user['id']))
-            user = c.fetchone()
-
-            if not user:
-                raise HTTPException(status.HTTP_404_NOT_FOUND,detail=f"User with id {current_user['id']} not found")
-
-            conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Database Error : {e}")
-        
-    return user
