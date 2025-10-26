@@ -94,5 +94,3 @@ def require_admin_role(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status.HTTP_403_FORBIDDEN,detail="You don't have permission to perform this action.")
     
     return current_user
-
-
