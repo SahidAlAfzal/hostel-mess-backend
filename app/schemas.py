@@ -163,3 +163,13 @@ class PushTokenUpdate(BaseModel):
 class NotificationCreate(BaseModel):
     title: str
     message: str
+
+#---------------------------Update User Info----------------------------#
+class UpdatedUserIn(BaseModel):
+    name: str
+    room_number: int
+
+class UpdatedUserOut(BaseModel):
+    id: int
+    name: str
+    room_number: int
