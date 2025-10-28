@@ -59,18 +59,23 @@ async def send_notification_to_all(title: str, body: str):
         return
 
     # --- FCM Message ---
-    message = messaging.MulticastMessage(
-        notification=messaging.Notification(
-            title=title,
-            body=body,
-        ),
-        tokens=push_tokens,
-    )
+    # --- FIX 2: Change from MulticastMessage to a list of Message objects ---
+    messages = [
+        messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            token=token,
+        )
+        for token in push_tokens
+    ]
+
 
     try:
-        # --- Run the blocking 'send_multicast' call in a thread pool ---
-        response = await run_in_threadpool(messaging.send_multicast, message) # type: ignore
+        # --- FIX 3: Change from send_multicast to send_all ---
+        # Run the blocking 'send_all' call in a thread pool
+        response = await run_in_threadpool(messaging.send_all, messages) # type: ignore
         print(f'Successfully sent notification to {response.success_count} users.')
     except Exception as e:
         print(f"FATAL: Error sending FCM notifications: {e}")
-
