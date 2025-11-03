@@ -81,7 +81,7 @@ async def send_notification_to_all(title: str, body: str):
                     notification=messaging.Notification(title=title, body=body),
                     tokens=chunk
                 )
-                resp = await run_in_threadpool(messaging.send_multicast, multicast)
+                resp = await run_in_threadpool(messaging.send_multicast, multicast) # type: ignore
                 success_count += getattr(resp, "success_count", 0)
                 failure_count += getattr(resp, "failure_count", 0)
                 # Log individual failures if present

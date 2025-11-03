@@ -14,6 +14,7 @@ router = APIRouter(
 
 # --- Define Timezone and Cut-off Hours ---
 IST = pytz.timezone('Asia/Kolkata')
+LUNCH_CUTOFF_HOUR = 7 # 7:00 AM
 TODAY_CUTOFF_HOUR = 18  # 6:00 PM
 NEXT_DAY_WINDOW_HOUR = 21 # 9:00 PM
 
@@ -55,6 +56,13 @@ def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(ge
     #CHECK FOR time logic
     validate_booking_time(booking.booking_date)
 
+    # RULE: CAN'T BOOK FOR LUNCH AFTER 7 AM
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
+    if booking.booking_date == today_ist and now_ist.hour >= LUNCH_CUTOFF_HOUR and booking.lunch_pick:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST.")
 
 
     # --- Part 1: Validation ---
