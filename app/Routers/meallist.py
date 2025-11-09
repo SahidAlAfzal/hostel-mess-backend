@@ -1,7 +1,8 @@
 from fastapi import APIRouter, status, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from datetime import date
+from datetime import date,datetime
 from typing import List
+import pytz
 from collections import Counter # Used for efficiently counting items
 import io  # Used for creating an in-memory file
 import csv # Python's built-in CSV library
@@ -13,6 +14,8 @@ router = APIRouter(
     prefix="/meallist",
     tags=['Meal List']
 )
+
+IST = pytz.timezone('Asia/Kolkata')
 
 # HELPER FUNCTION to avoid repeating code for processing database results
 def process_meal_list_results(results: list, booking_date: date):
@@ -56,17 +59,19 @@ def process_meal_list_results(results: list, booking_date: date):
 @router.get("/today", response_model=schemas.MealListOut)
 def get_todays_meal_list(conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.require_admin_role)):
     
-    today_date = date.today()
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
     query = """
         SELECT u.name as user_name, u.room_number, mb.lunch_pick, mb.dinner_pick
         FROM meal_bookings AS mb JOIN users AS u ON mb.user_id = u.id
         WHERE mb.booking_date = %s;
     """
     with conn.cursor() as cur:
-        cur.execute(query, (today_date,))
+        cur.execute(query, (today_ist,))
         results = cur.fetchall()
     
-    return process_meal_list_results(results, today_date)
+    return process_meal_list_results(results, today_ist)
 
 
 
@@ -95,13 +100,17 @@ def get_meal_list_for_date(booking_date: date, conn=Depends(get_db_connection), 
 # ENDPOINT 1: Get the meal list for TODAY (user based Endpoint)
 @router.get("/me/today", response_model=schemas.MealListItem)
 def my_meal(conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
+
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
     query = """
         SELECT u.name as user_name, u.room_number, mb.lunch_pick, mb.dinner_pick
         FROM meal_bookings AS mb JOIN users AS u ON mb.user_id = u.id
         WHERE mb.booking_date = %s AND u.id=%s;
     """
     with conn.cursor() as cur:
-        cur.execute(query, (date.today(),current_user['id']))
+        cur.execute(query, (today_ist,current_user['id']))
         results = cur.fetchone()
     
     if results is None:
