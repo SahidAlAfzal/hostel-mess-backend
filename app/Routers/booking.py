@@ -36,11 +36,115 @@ def validate_booking_time(booking_date: date):
     if booking_date == today_ist:
         if now_ist.hour >= TODAY_CUTOFF_HOUR:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Booking for today is closed after {TODAY_CUTOFF_HOUR}:00 IST.")
+        
+#-------------------------------------Previous-----------------------------------------
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.MealBookingOut
+)
+def create_or_update_booking(
+    booking: schemas.MealBookingCreate,
+    conn=Depends(get_db_connection),
+    current_user: dict = Depends(oauth2.get_current_user)
+):
 
+    # ------------------------------
+    #   PART 0: Mess Active Check
+    # ------------------------------
+    if not current_user["is_mess_active"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your Mess is off!! Please contact mess committee"
+        )
+
+    # ------------------------------
+    #   PART 1: Time Validations
+    # ------------------------------
+    validate_booking_time(booking.booking_date)
+
+    # Rule: Cannot book lunch for today after cutoff time
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
+    if (
+        booking.booking_date == today_ist
+        and now_ist.hour >= LUNCH_CUTOFF_HOUR
+        and booking.lunch_pick
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST."
+        )
+
+    # ------------------------------
+    #   PART 2: Fetch Menu for Date
+    # ------------------------------
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM daily_menus WHERE menu_date = %s",
+            (booking.booking_date,)
+        )
+        menu = cur.fetchone()
+
+    if not menu:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"The menu for {booking.booking_date} has not been set yet. "
+                   f"Booking is not available."
+        )
+
+    # ------------------------------
+    #   PART 3: Validation Logic
+    # ------------------------------
+    # Validate lunch picks
+    if booking.lunch_pick:
+        if not set(booking.lunch_pick).issubset(set(menu["lunch_options"])):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more of your lunch picks are not valid options on this day."
+            )
+
+    # Validate dinner picks
+    if booking.dinner_pick:
+        if not set(booking.dinner_pick).issubset(set(menu["dinner_options"])):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more of your dinner picks are not valid options on this day."
+            )
+
+    # ------------------------------
+    #   PART 4: UPSERT (Insert or Update)
+    # ------------------------------
+    query = """
+        INSERT INTO meal_bookings (user_id, booking_date, lunch_pick, dinner_pick)
+        VALUES (%(user_id)s, %(booking_date)s, %(lunch_pick)s, %(dinner_pick)s)
+        ON CONFLICT (user_id, booking_date) DO UPDATE SET
+            lunch_pick = EXCLUDED.lunch_pick,
+            dinner_pick = EXCLUDED.dinner_pick
+        RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
+    """
+
+    params = booking.model_dump()
+    params["user_id"] = current_user["id"]
+
+    with conn.cursor() as cur:
+        try:
+            cur.execute(query, params)
+            new_booking = cur.fetchone()
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database error: {e}"
+            )
+
+    return new_booking
 
 
 #-------------------------------------------------------CREATE A BOOKING----------------------------------------------------#
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.MealBookingOut)
+@router.post("/book", status_code=status.HTTP_201_CREATED, response_model=schemas.MealBookingOut)
 def create_booking(booking: schemas.MealBookingCreate, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
     #Check mess is off or not
     if not current_user['is_mess_active']:
