@@ -16,7 +16,6 @@ router = APIRouter(
 IST = pytz.timezone('Asia/Kolkata')
 LUNCH_CUTOFF_HOUR = 7 # 7:00 AM
 TODAY_CUTOFF_HOUR = 18  # 6:00 PM
-NEXT_DAY_WINDOW_HOUR = 21 # 9:00 PM
 
 
 def validate_booking_time(booking_date: date):
@@ -28,6 +27,7 @@ def validate_booking_time(booking_date: date):
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
+
     # Rule 1: Prevent any action on past dates
     if booking_date < today_ist:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot perform actions on a past date.")
@@ -37,17 +37,11 @@ def validate_booking_time(booking_date: date):
         if now_ist.hour >= TODAY_CUTOFF_HOUR:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Booking for today is closed after {TODAY_CUTOFF_HOUR}:00 IST.")
 
-    # Rule 3: Check for the next-day-only window (after 9 PM)
-    if now_ist.hour >= NEXT_DAY_WINDOW_HOUR:
-        tomorrow_ist = today_ist + timedelta(days=1)
-        if booking_date != tomorrow_ist:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"After {NEXT_DAY_WINDOW_HOUR}:00 IST, you can only book or modify meals for the next day.")
 
 
-
-
+#-------------------------------------------------------CREATE A BOOKING----------------------------------------------------#
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.MealBookingOut)
-def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
+def create_booking(booking: schemas.MealBookingCreate, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
     #Check mess is off or not
     if not current_user['is_mess_active']:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="Your Mess is off!! Please contact mess committee")
@@ -77,7 +71,6 @@ def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(ge
 
     # --- VALIDATION LOGIC ---
     # Check if every item in the user's lunch pick list is a valid menu option.
-    # We use set().issubset() for an efficient check.
     if booking.lunch_pick and not set(booking.lunch_pick).issubset(set(menu['lunch_options'])):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"One or more of your lunch picks are not valid options on this day.")
@@ -89,15 +82,12 @@ def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(ge
                             detail=f"One or more of your dinner picks are not valid options on this day.")
 
 
-    # --- Part 2: The "UPSERT" Query ---
-    # This query remains the same, as psycopg2 can handle passing a Python list
-    # directly to a PostgreSQL TEXT[] array column.
+    # --- Part 2: The "INSERT" Query ---
+    # This query is now a simple INSERT, not an UPSERT.
+    # It will fail with a unique_violation error if a booking already exists.
     query = """
         INSERT INTO meal_bookings (user_id, booking_date, lunch_pick, dinner_pick)
         VALUES (%(user_id)s, %(booking_date)s, %(lunch_pick)s, %(dinner_pick)s)
-        ON CONFLICT (user_id, booking_date) DO UPDATE SET
-            lunch_pick = EXCLUDED.lunch_pick,
-            dinner_pick = EXCLUDED.dinner_pick
         RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
     """
     
@@ -111,6 +101,13 @@ def create_or_update_booking(booking: schemas.MealBookingCreate, conn=Depends(ge
             conn.commit()
         except Exception as e:
             conn.rollback()
+            # Check if the error is a 'unique_violation' (pgcode 23505)
+            if hasattr(e, 'pgcode') and e.pgcode == '23505': # type: ignore
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"A booking for {booking.booking_date} already exists. Please use the 'update' endpoints to make changes."
+                )
+            # For any other database error
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
 
     return new_booking
@@ -156,7 +153,114 @@ def delete_booking(booking_date: date, conn = Depends(get_db_connection),current
         
         # Return a 204 No Content response on successful deletion.
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    
 
+#-----------------------------------------------------UPDATE LUNCH BOOKINGS------------------------------------------------------#
+@router.patch("/update-lunch",status_code=status.HTTP_200_OK,response_model=schemas.MealBookingOut)
+def update_Lunch(booking:schemas.LunchUpdate, conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
+    # This validates Rules 1, 2, and 3 (past dates, 6 PM cutoff, 9 PM window)
+    validate_booking_time(booking.booking_date)
 
+    # RULE: CAN'T BOOK FOR LUNCH AFTER 7 AM
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
+    if booking.booking_date == today_ist and now_ist.hour >= LUNCH_CUTOFF_HOUR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST.")
+    
+
+    #----------Menu Validation-----------
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM daily_menus WHERE menu_date = %s", (booking.booking_date,))
+        menu = cur.fetchone()
+
+    if not menu:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"The menu for {booking.booking_date} has not been set yet.")
+
+    # Check if the new lunch pick is valid
+    if booking.lunch_pick and not set(booking.lunch_pick).issubset(set(menu['lunch_options'])):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"One or more of your lunch picks are not valid options on this day.")
+    
+
+    user_id = current_user['id']
+
+    query = """UPDATE meal_bookings SET lunch_pick = %s WHERE user_id = %s AND booking_date = %s
+            RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
+            """
+    
+    with conn.cursor() as cur:
+        try:
+            cur.execute(query,(booking.lunch_pick,user_id,booking.booking_date))
+            updated_booking = cur.fetchone()
+
+            if not updated_booking:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No booking found for user {user_id} on {booking.booking_date}"
+                )
+            conn.commit()
+
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
+        
+    return updated_booking
+    
+
+#-----------------------------------------------------UPDATE DINNER BOOKINGS------------------------------------------------------#
+@router.patch("/update-dinner",status_code=status.HTTP_200_OK,response_model=schemas.MealBookingOut)
+def update_Dinner(booking:schemas.DinnerUpdate, conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
+    #CHECK FOR time logic
+    validate_booking_time(booking.booking_date)
+    
+    # RULE: CAN'T BOOK FOR Dinner AFTER 6 PM
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
+    #----------Menu Validation-----------
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM daily_menus WHERE menu_date = %s", (booking.booking_date,))
+        menu = cur.fetchone()
+
+    if not menu:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"The menu for {booking.booking_date} has not been set yet.")
+
+    # Check if the new lunch pick is valid
+    if booking.dinner_pick and not set(booking.dinner_pick).issubset(set(menu['dinner_options'])):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"One or more of your dinner picks are not valid options on this day.")
+    
+    if booking.booking_date == today_ist and now_ist.hour >= TODAY_CUTOFF_HOUR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"Cannot book dinner for today after {TODAY_CUTOFF_HOUR}:00 IST.")
+    
+
+    user_id = current_user['id']
+
+    query = """UPDATE meal_bookings SET dinner_pick = %s WHERE user_id = %s AND booking_date = %s
+            RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
+            """
+    
+    with conn.cursor() as cur:
+        try:
+            cur.execute(query,(booking.dinner_pick,user_id,booking.booking_date))
+            updated_booking = cur.fetchone()
+
+            if not updated_booking:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No booking found for user {user_id} on {booking.booking_date}"
+                )
+            
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
+        
+        return updated_booking
 
 

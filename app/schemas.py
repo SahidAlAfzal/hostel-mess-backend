@@ -33,6 +33,15 @@ class MealBookingCreate(BaseModel):
     lunch_pick: Optional[List[str]] = None
     dinner_pick: Optional[List[str]] = None
 
+
+class LunchUpdate(BaseModel):
+    booking_date: date
+    lunch_pick: Optional[List[str]] = None
+
+class DinnerUpdate(BaseModel):
+    booking_date: date
+    dinner_pick: Optional[List[str]] = None
+
 class MyBookingHistoryItem(BaseModel):
     booking_date: date
     lunch_pick: Optional[List[str]] = None
