@@ -57,7 +57,7 @@ def process_meal_list_results(results: list, booking_date: date):
 
 # ENDPOINT 1: Get the meal list for TODAY (admin based Endpoint)
 @router.get("/today", response_model=schemas.MealListOut)
-def get_todays_meal_list(conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.require_admin_role)):
+def get_todays_meal_list(conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
     
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
@@ -78,7 +78,7 @@ def get_todays_meal_list(conn=Depends(get_db_connection), current_user: dict = D
 
 # ENDPOINT 2: Get the meal list for a SPECIFIC date
 @router.get("/{booking_date}", response_model=schemas.MealListOut)
-def get_meal_list_for_date(booking_date: date, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.require_admin_role)):
+def get_meal_list_for_date(booking_date: date, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
     """
     Retrieves the detailed meal list and summary for a specific chosen date.
     """
@@ -123,7 +123,7 @@ def my_meal(conn = Depends(get_db_connection),current_user: dict = Depends(oauth
 
 #----------------------------------------------------------DOWNLOAD MEAL LIST--------------------------------------------------------#
 @router.get("/{booking_date}/download")
-def download_meal_list_for_date(booking_date: date, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.require_convenor_role)):
+def download_meal_list_for_date(booking_date: date, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
     """
     Generates and returns a CSV file of all meal bookings for a specific date,
     including a summary of total counts.
