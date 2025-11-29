@@ -66,6 +66,13 @@ def send_password_reset_email(email: EmailStr, name: str, token: str):
         subject='Hostel Mess: Password Reset Request',
         html_content=html_content
     )
+
+    # DEBUG: Check what the key looks like (masking the middle for security)
+    if SENDGRID_API_KEY:
+        masked_key = f"{SENDGRID_API_KEY[:4]}...{SENDGRID_API_KEY[-4:]}"
+        print(f"DEBUG: Using API Key: {masked_key}")
+        print(f"DEBUG: Key Length: {len(SENDGRID_API_KEY)}")
+        
     try:
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         sg.send(message)
