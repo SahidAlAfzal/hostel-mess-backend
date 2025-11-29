@@ -1,82 +1,65 @@
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
-from pydantic import EmailStr
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
 
-# We will need the MAIL_FROM address from our environment
-MAIL_FROM = os.getenv("MAIL_FROM", "default@example.com") 
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+# Load config
+SMTP_SERVER = os.getenv("MAIL_SERVER", "smtp-relay.brevo.com")
+SMTP_PORT = int(os.getenv("MAIL_PORT", 587))
+SENDER_EMAIL = os.getenv("MAIL_FROM")      # The email you verified in Brevo
+SMTP_LOGIN = os.getenv("MAIL_USERNAME")    # Your Brevo login email
+SMTP_PASSWORD = os.getenv("MAIL_PASSWORD") # The XS... key you generated
 
-def send_verification_email(email: EmailStr, name: str, token: str):
-    """
-    Sends the account verification email to a new user using SendGrid.
-    """
-    if not SENDGRID_API_KEY:
-        print("WARNING: SENDGRID_API_KEY not set. Email will not be sent.")
+def send_email_smtp(to_email: str, subject: str, html_content: str):
+    if not SMTP_PASSWORD or not SENDER_EMAIL:
+        print("FATAL: Email credentials not set in .env")
         return
 
-    html_content = f"""
-    <html><body>
-        <p>Hi {name},</p>
-        <p>Please click the link below to verify your email and activate your account:</p>
-        <a href="https://hostel-mess-backend.onrender.com/auth/verifyemail?token={token}">Verify Your Email</a>
-    </body></html>
-    """
-    message = Mail(
-        from_email=MAIL_FROM,
-        to_emails=email,
-        subject='Hostel Mess: Verify Your Email',
-        html_content=html_content
-    )
+    # Create the email object
+    msg = MIMEMultipart()
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html_content, 'html'))
+
     try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        sg.send(message)
+        # Connect to Brevo's SMTP server
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls() # Secure the connection
+        server.login(SMTP_LOGIN, SMTP_PASSWORD) # type: ignore
+        server.send_message(msg)
+        server.quit()
+        print(f"✅ Email sent successfully to {to_email}")
     except Exception as e:
-        print(f"Error sending email via SendGrid: {e}")
+        print(f"❌ Failed to send email: {e}")
+
+# --- Wrappers to match your auth.py calls ---
+
+def send_verification_email(email: str, name: str, token: str):
+    # Update this URL to match your frontend/backend URL
+    verify_url = f"https://hostel-mess-backend.onrender.com/auth/verifyemail?token={token}"
     
-
-def send_password_reset_email(email: EmailStr, name: str, token: str):
-    """
-    Sends the password reset email to a user.
-    """
-    if not SENDGRID_API_KEY or not MAIL_FROM:
-        print("WARNING: Email credentials not set. Password reset email will not be sent.")
-        return
-
-    html_content = f"""
+    html = f"""
     <html>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-        <div style="max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
-            <h2 style="color: #000;">Password Reset Request</h2>
-            <p>Hi {name},</p>
-            <p>You recently requested to reset your password for the Hostel Mess App. Please use the token below to complete the reset process.</p>
-            <p>This token is valid for <strong>15 minutes</strong>.</p>
-            <p style="background-color: #f5f5f5; border: 1px dashed #ccc; padding: 10px; text-align: center; font-size: 1.2em; letter-spacing: 2px;">
-                <strong>{token}</strong>
-            </p>
-            <p>If you did not request a password reset, you can safely ignore this email.</p>
-            <p>Thanks,<br/>The Hostel Mess Team</p>
-        </div>
-    </body>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2>Welcome to MessBook, {name}!</h2>
+            <p>Please verify your email address to activate your account.</p>
+            <a href="{verify_url}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Email</a>
+            <p>Or paste this link: {verify_url}</p>
+        </body>
     </html>
     """
-    message = Mail(
-        from_email=MAIL_FROM,
-        to_emails=email,
-        subject='Hostel Mess: Password Reset Request',
-        html_content=html_content
-    )
+    send_email_smtp(email, "MessBook: Verify Your Account", html)
 
-    # DEBUG: Check what the key looks like (masking the middle for security)
-    if SENDGRID_API_KEY:
-        masked_key = f"{SENDGRID_API_KEY[:4]}...{SENDGRID_API_KEY[-4:]}"
-        print(f"DEBUG: Using API Key: {masked_key}")
-        print(f"DEBUG: Key Length: {len(SENDGRID_API_KEY)}")
-        
-    try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        sg.send(message)
-        print(f"Password reset email sent to {email}.")
-    except Exception as e:
-        print(f"FATAL: Error sending password reset email via SendGrid: {e}")
-
+def send_password_reset_email(email: str, name: str, token: str):
+    html = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2>Password Reset</h2>
+            <p>Hi {name}, use the token below to reset your password:</p>
+            <h3 style="background: #eee; padding: 10px; display: inline-block;">{token}</h3>
+            <p>This token expires in 15 minutes.</p>
+        </body>
+    </html>
+    """
+    send_email_smtp(email, "MessBook: Password Reset", html)
