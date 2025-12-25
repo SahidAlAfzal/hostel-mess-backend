@@ -23,10 +23,13 @@ def send_email_smtp(to_email: str, subject: str, html_content: str):
     msg.attach(MIMEText(html_content, 'html'))
 
     try:
-        # Use SMTP_SSL for Port 465
-        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) 
-        # server.starttls() # REMOVE THIS LINE, not needed for SMTP_SSL
-        server.login(SMTP_LOGIN, SMTP_PASSWORD) # type: ignore 
+        # Using SMTP (not SMTP_SSL) for port 587
+        print(f"📧 Sending email to {to_email}")
+        print(f"   Server: {SMTP_SERVER}:{SMTP_PORT}")
+        print(f"   From: {SENDER_EMAIL}")
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()  # Enable TLS encryption
+        server.login(SMTP_LOGIN, SMTP_PASSWORD)  # type: ignore
         server.send_message(msg)
         server.quit()
         print(f"✅ Email sent successfully to {to_email}")
