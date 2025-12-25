@@ -5,7 +5,7 @@ import os
 
 # Load config
 SMTP_SERVER = os.getenv("MAIL_SERVER", "smtp-relay.brevo.com")
-SMTP_PORT = int(os.getenv("MAIL_PORT", 587))
+SMTP_PORT = int(os.getenv("MAIL_PORT", 465))  # Default to 465 for SMTP_SSL
 SENDER_EMAIL = os.getenv("MAIL_FROM")      # The email you verified in Brevo
 SMTP_LOGIN = os.getenv("MAIL_USERNAME")    # Your Brevo login email
 SMTP_PASSWORD = os.getenv("MAIL_PASSWORD") # The XS... key you generated
@@ -27,14 +27,14 @@ def send_email_smtp(to_email: str, subject: str, html_content: str):
         print(f"📧 Sending email to {to_email}")
         print(f"   Server: {SMTP_SERVER}:{SMTP_PORT}")
         print(f"   From: {SENDER_EMAIL}")
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()  # Enable TLS encryption
+        
+        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
         server.login(SMTP_LOGIN, SMTP_PASSWORD)  # type: ignore
         server.send_message(msg)
         server.quit()
         print(f"✅ Email sent successfully to {to_email}")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"❌ Failed to send email: {type(e).__name__}: {e}")
 
 # --- Wrappers to match your auth.py calls ---
 
