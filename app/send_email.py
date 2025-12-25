@@ -23,10 +23,10 @@ def send_email_smtp(to_email: str, subject: str, html_content: str):
     msg.attach(MIMEText(html_content, 'html'))
 
     try:
-        # Connect to Brevo's SMTP server
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls() # Secure the connection
-        server.login(SMTP_LOGIN, SMTP_PASSWORD) # type: ignore
+        # Use SMTP_SSL for Port 465
+        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) 
+        # server.starttls() # REMOVE THIS LINE, not needed for SMTP_SSL
+        server.login(SMTP_LOGIN, SMTP_PASSWORD) # type: ignore 
         server.send_message(msg)
         server.quit()
         print(f"✅ Email sent successfully to {to_email}")
