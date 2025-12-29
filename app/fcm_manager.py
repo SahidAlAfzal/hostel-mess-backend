@@ -108,3 +108,74 @@ async def send_notification_to_all(title: str, body: str):
             print(f"Failed to send to {failure_count} users.")
     except Exception as e:
         print(f"FATAL: Error sending FCM notifications: {e}")
+
+
+
+#---------------------------------------Send notification to specific tokens------------------------------------------#
+async def send_notification(tokens: list[str], title: str, body: str):
+    """
+    Send a notification to specific users by their push tokens.
+    """
+    if not firebase_admin._apps:
+        print("FCM Error: Firebase app not initialized. Cannot send notification.")
+        return
+
+    if not tokens:
+        print("No tokens provided for notification.")
+        return
+
+    # FCM limits multicast to 500 tokens per request
+    MAX_TOKENS_PER_BATCH = 500
+
+    success_count = 0
+    failure_count = 0
+
+    def chunked(iterable, size):
+        for i in range(0, len(iterable), size):
+            yield iterable[i:i + size]
+
+    try:
+        if hasattr(messaging, "send_multicast"):
+            # Use send_multicast in chunks of up to 500 tokens
+            for chunk in chunked(tokens, MAX_TOKENS_PER_BATCH):
+                multicast = messaging.MulticastMessage(
+                    notification=messaging.Notification(title=title, body=body),
+                    tokens=chunk
+                )
+                resp = await run_in_threadpool(messaging.send_multicast, multicast) # type: ignore
+                success_count += getattr(resp, "success_count", 0)
+                failure_count += getattr(resp, "failure_count", 0)
+                # Log individual failures if present
+                for idx, r in enumerate(getattr(resp, "responses", [])):
+                    if not getattr(r, "success", False):
+                        print(f"Failed for token {chunk[idx]}: {getattr(r, 'exception', None)}")
+        else:
+            # Fallback: send messages one-by-one
+            for chunk in chunked(tokens, MAX_TOKENS_PER_BATCH):
+                for token in chunk:
+                    message = messaging.Message(
+                        notification=messaging.Notification(title=title, body=body),
+                        token=token
+                    )
+                    try:
+                        await run_in_threadpool(messaging.send, message)
+                        success_count += 1
+                    except Exception as e:
+                        failure_count += 1
+                        print(f"Failed for token {token}: {e}")
+
+        print(f"Successfully sent notification to {success_count} users.")
+        if failure_count > 0:
+            print(f"Failed to send to {failure_count} users.")
+            
+        return {"success": success_count, "failure": failure_count}
+    except Exception as e:
+        print(f"FATAL: Error sending FCM notifications: {e}")
+        return {"success": 0, "failure": len(tokens)}
+    
+def send_notification_bg(tokens: list[str], title: str, body: str):
+    """
+    Sync wrapper for BackgroundTasks.
+    """
+    import asyncio
+    asyncio.run(send_notification(tokens, title, body))
