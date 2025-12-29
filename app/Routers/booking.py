@@ -1,10 +1,12 @@
-from fastapi import APIRouter, status, HTTPException, Depends,Response
+from fastapi import APIRouter, status, HTTPException, Depends,Response, BackgroundTasks
 from datetime import date,datetime,timedelta
 import psycopg2
 from typing import List
 import pytz
 from .. import schemas, oauth2
 from ..database import get_db_connection
+from .. import fcm_manager
+
 
 router = APIRouter(
     prefix="/bookings",
@@ -368,3 +370,88 @@ def update_Dinner(booking:schemas.DinnerUpdate, conn = Depends(get_db_connection
         return updated_booking
 
 
+#----------------------------------------------------Wake Up Convenor------------------------------------------------------#
+@router.post("/wake-convenor", status_code=status.HTTP_200_OK)
+def wake_up_convenor(background_tasks: BackgroundTasks, conn = Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
+    # Using one transaction block for the entire database operation
+    try:
+        with conn:
+            with conn.cursor() as cur:
+
+                # 1. Cooldown Check with Row-Level Lock
+                cur.execute("""
+                    SELECT last_triggered_at
+                    FROM system_cooldowns
+                    WHERE task_name = 'wake_convenor'
+                    FOR UPDATE
+                """)
+                row = cur.fetchone()
+                last_called = row['last_triggered_at']
+
+                if datetime.now(IST) - last_called < timedelta(minutes=1):
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Convenors recently notified. Please wait a moment."
+                    )
+
+                # 2. Check if menu exists (still inside the transaction)
+                target_date = today_ist + timedelta(days=1) if now_ist.hour >= 21 else today_ist
+
+                cur.execute("SELECT id FROM daily_menus WHERE menu_date = %s",(target_date,))  
+                
+                if cur.fetchone():    #if menu exists
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Menu is already set for the date."
+                    )
+
+                # 3. Update cooldown
+                cur.execute(
+                    """
+                    UPDATE system_cooldowns
+                    SET last_triggered_at = %s
+                    WHERE task_name = 'wake_convenor'
+                    """,
+                    (datetime.now(IST),)
+                )
+
+                # 4. Fetch convenors
+                cur.execute(
+                    "SELECT id, name, push_token FROM users WHERE role = 'convenor'"
+                )
+                convenors = cur.fetchall()
+
+    except HTTPException:
+        # Let FastAPI handle expected errors (429 / 400)
+        raise
+    except Exception as e:
+        # Handles genuine DB errors
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}"
+        )
+
+
+
+
+    # --- Background Tasks (Outside the transaction) ---
+    if not convenors:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No convenors found."
+        )
+
+    for convenor in convenors:
+        if convenor['push_token']:
+            background_tasks.add_task(
+                fcm_manager.send_notification, # type: ignore
+                convenor['push_token'],
+                "Urgent: Menu Call",
+                f"Hi {convenor['name']}, {current_user['name']} is asking for the menu!"
+            )
+
+    return {"message": "Notifications sent","convenors": [convenor['name'] for convenor in convenors]}
+    
