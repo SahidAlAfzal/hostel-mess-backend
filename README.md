@@ -1,36 +1,26 @@
-📌 Overview
-MessBook is a digital solution for hostels and institutional messes. It eliminates manual register-keeping by allowing students to book or cancel meals through a web/mobile interface, while providing mess managers with real-time data on headcounts and inventory.
+# MessBook
 
-✨ Features
-Meal Booking & Cancellation: Easy-to-use interface for students to manage their daily meals.
+This repository contains the complete description for **MessBook**, a backend of hostel mess management application.
 
-Dynamic Cutoff Times: Automated locking of bookings based on specific hours (e.g., breakfast cutoff at 8:00 PM the night before).
+## About MessBook
 
-Menu Management: Weekly/Monthly menu displays updated by the administration.
+MessBook is a comprehensive application built to digitize and streamline hostel mess operations. It provides a simple interface for students to manage their meals and a powerful dashboard for administrators to manage the mess.
 
-Analytics Dashboard: Insights for managers to track food waste and popular meals.
+## Tech Stack
 
-User Authentication: Secure login for students and staff with role-based access control (RBAC).
+This project leverages a modern, robust tech stack:
 
-Billing & History: Automated generation of monthly mess bills and individual meal history.
+* **Backend:** `FastAPI` (Python)
+* **Database:** `PostgreSQL`
+* **Frontend:** `Flutter` (Dart) which is developed by my collaborator of the project
 
-🛠 Tech Stack
-Frontend: [e.g., React.js / Flutter / Vue.js]
+## Core API Features
 
-Backend: [e.g., Python (FastAPI/Django) / Node.js]
+The backend API is designed around REST principles and includes the following features:
 
-Database: [e.g., PostgreSQL / MongoDB]
-
-Authentication: [e.g., JWT / Firebase Auth]
-
-Deployment: [e.g., Render / AWS / Heroku]
-
-🚀 Getting Started
-Prerequisites
-List any software needed to run the project:
-
-[e.g., Python 3.9+]
-
-[e.g., PostgreSQL]
-
-[e.g., Node.js & npm]
+* **User Authentication:** Secure token-based (OAuth2) authentication for students and administrators.
+* **Meal Booking:** Endpoints for students to book or cancel their meals for specific dates or time slots.
+* **Menu Management:** Admin-only routes to create, update, and publish the weekly/daily mess menu.
+* **Notice Board:** Admin routes to post announcements; student routes to fetch all active notices.
+* **User Management:** Admin controls to manage student accounts, including the ability to enable or disable mess access for individuals.
+* **Profile Management:** Endpoints for users to view their account info and change their password.
