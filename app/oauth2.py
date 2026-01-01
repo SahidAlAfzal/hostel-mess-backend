@@ -4,12 +4,13 @@ from fastapi import Depends,HTTPException,status
 from typing import Optional
 from . import schemas,database
 from fastapi.security import OAuth2PasswordBearer
+import os
 
 # This creates a dependency that will look for the token in the request's "Authorization" header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl='auth/login')
 
 
-SECRET_KEY = "awiu7238xbbwakjsil9al2874jhdsssaki38435jkw9aayqi2hawgdsaKaki284"
+SECRET_KEY = os.getenv("SECRET_KEY","DEFAULT_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 100
 
