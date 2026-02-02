@@ -13,4 +13,5 @@ def send_reminder(background_tasks: BackgroundTasks, conn = Depends(database.get
         fcm_manager.send_notification_to_all, notification_title, notification_body
     )
     
+
     return {"message": "Reminder notifications are being sent in the background."}
