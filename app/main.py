@@ -5,7 +5,7 @@ from . import schemas
 from .database import get_db_connection
 from fastapi.security import OAuth2PasswordRequestForm
 from . import oauth2, utils
-from .Routers import auth,menus,booking,notice,users,meallist,notification
+from .Routers import auth,menus,booking,notice,users,meallist,notification,reminder
 from fastapi.middleware.cors import CORSMiddleware
 
 # Create an instance of the FastAPI application
@@ -27,6 +27,7 @@ app.include_router(notice.router)
 app.include_router(users.router)
 app.include_router(meallist.router)
 app.include_router(notification.router)
+app.include_router(reminder.router)
 
 
 
