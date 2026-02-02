@@ -9,7 +9,7 @@ from .Routers import auth,menus,booking,notice,users,meallist,notification
 from fastapi.middleware.cors import CORSMiddleware
 
 # Create an instance of the FastAPI application
-app = FastAPI()
+app = FastAPI(title="MessBook - Hostel Management System API")
 
 app.add_middleware(
     CORSMiddleware,
