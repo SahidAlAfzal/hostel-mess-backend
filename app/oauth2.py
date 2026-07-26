@@ -66,34 +66,33 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 
 #------------------------------------Check for convenor---------------------------------------#
-def require_convenor_role(current_user: dict = Depends(get_current_user)):
+def require_convenor_role(current_user: models.User = Depends(get_current_user)):
     """
     A dependency that checks if the current user is a convenor.
     """
-
-    if current_user['role'] not in ['convenor']:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,detail="You don't have permission to perform this action.")
-    
+    if current_user.role not in ['convenor']:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You don't have permission to perform this action.")
+        
     return current_user
+
 
 #------------------------------------Check for Mess Committee---------------------------------------#
-def require_mess_committee_role(current_user: dict = Depends(get_current_user)):
+def require_mess_committee_role(current_user: models.User = Depends(get_current_user)):
     """
-    A dependency that checks if the current user is a convenor.
+    A dependency that checks if the current user is a mess committee member.
     """
-
-    if current_user['role'] not in ['mess_committee']:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,detail="You don't have permission to perform this action.")
-    
+    if current_user.role not in ['mess_committee']:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You don't have permission to perform this action.")
+        
     return current_user
 
-#---------------------------------------Check for admin------------------------------------------#
-def require_admin_role(current_user: dict = Depends(get_current_user)):
-    """
-    A dependency that checks if the current user is a convenor.
-    """
 
-    if current_user['role'] not in ['convenor','mess_committee']:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,detail="You don't have permission to perform this action.")
-    
+#---------------------------------------Check for admin------------------------------------------#
+def require_admin_role(current_user: models.User = Depends(get_current_user)):
+    """
+    A dependency that checks if the current user is an admin (convenor or mess committee).
+    """
+    if current_user.role not in ['convenor', 'mess_committee']:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You don't have permission to perform this action.")
+        
     return current_user
