@@ -2,7 +2,6 @@ from fastapi import FastAPI,Depends,status,HTTPException,APIRouter,Response
 from psycopg2.errors import UniqueViolation # type: ignore
 import psycopg2 # type: ignore
 from . import schemas
-from .database import get_db_connection
 from fastapi.security import OAuth2PasswordRequestForm
 from . import oauth2, utils
 from .Routers import auth,menus,booking,notice,users,meallist,notification,reminder

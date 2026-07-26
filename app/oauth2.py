@@ -2,8 +2,11 @@ from jose import JWTError,jwt
 from datetime import datetime,timedelta,timezone
 from fastapi import Depends,HTTPException,status
 from typing import Optional
-from . import schemas,database
+from . import schemas
+from database import get_db
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+import models
 import os
 
 # This creates a dependency that will look for the token in the request's "Authorization" header
@@ -11,7 +14,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl='auth/login')
 
 
 SECRET_KEY = os.getenv("SECRET_KEY","DEFAULT_KEY")
-ALGORITHM = "HS256"
+ALGORITHM = os.getenv("ALGORITHM","HS256")
 ACCESS_TOKEN_EXPIRE_DAYS = 100
 
 
@@ -44,7 +47,7 @@ def verify_access_token(token:str,credential_exceptions):
     return token_data
 
 #--------------------------------------Based on token data of user is returned-------------------------------------#
-def get_current_user(token: str = Depends(oauth2_scheme), conn = Depends(database.get_db_connection)):
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -52,12 +55,11 @@ def get_current_user(token: str = Depends(oauth2_scheme), conn = Depends(databas
     )
 
     token_data = verify_access_token(token,credentials_exception)
-    with conn.cursor() as c:
-        c.execute("SELECT * FROM users WHERE id=%s",(str(token_data.user_id),))
-        user = c.fetchone()
+        
+    user = db.query(models.User).filter(models.User.id == token_data.user_id).first()
 
     if not user:
-        raise credentials_exception
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
     
     return user
 

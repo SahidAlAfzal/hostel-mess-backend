@@ -1,24 +1,23 @@
-from fastapi import APIRouter, status, HTTPException, Depends,Response, BackgroundTasks
-from datetime import date,datetime,timedelta
-import psycopg2
+from fastapi import APIRouter, status, HTTPException, Depends, Response, BackgroundTasks
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from datetime import date, datetime, timedelta
 from typing import List
 import pytz
-from .. import schemas, oauth2
-from ..database import get_db_connection
-from .. import fcm_manager
 
+from .. import schemas, oauth2, models
+from ..database import get_db
+from .. import fcm_manager
 
 router = APIRouter(
     prefix="/bookings",
     tags=['Bookings']
 )
 
-
 # --- Define Timezone and Cut-off Hours ---
 IST = pytz.timezone('Asia/Kolkata')
-LUNCH_CUTOFF_HOUR = 7 # 7:00 AM
+LUNCH_CUTOFF_HOUR = 7   # 7:00 AM
 TODAY_CUTOFF_HOUR = 18  # 6:00 PM
-
 
 def validate_booking_time(booking_date: date):
     """
@@ -29,7 +28,6 @@ def validate_booking_time(booking_date: date):
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
-
     # Rule 1: Prevent any action on past dates
     if booking_date < today_ist:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot perform actions on a past date.")
@@ -39,22 +37,17 @@ def validate_booking_time(booking_date: date):
         if now_ist.hour >= TODAY_CUTOFF_HOUR:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Booking for today is closed after {TODAY_CUTOFF_HOUR}:00 IST.")
         
-#-------------------------------------Previous-----------------------------------------
-@router.post(
-    "/",
-    status_code=status.HTTP_201_CREATED,
-    response_model=schemas.MealBookingOut
-)
+#-------------------------------------CREATE OR UPDATE (UPSERT)-----------------------------------------#
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.MealBookingOut)
 def create_or_update_booking(
     booking: schemas.MealBookingCreate,
-    conn=Depends(get_db_connection),
-    current_user: dict = Depends(oauth2.get_current_user)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(oauth2.get_current_user)
 ):
-
     # ------------------------------
     #   PART 0: Mess Active Check
     # ------------------------------
-    if not current_user["is_mess_active"]:
+    if not current_user.is_mess_active:     # type: ignore
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your Mess is off!! Please contact mess committee"
@@ -65,7 +58,6 @@ def create_or_update_booking(
     # ------------------------------
     validate_booking_time(booking.booking_date)
 
-    # Rule: Cannot book lunch for today after cutoff time
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
@@ -82,34 +74,26 @@ def create_or_update_booking(
     # ------------------------------
     #   PART 2: Fetch Menu for Date
     # ------------------------------
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM daily_menus WHERE menu_date = %s",
-            (booking.booking_date,)
-        )
-        menu = cur.fetchone()
+    menu = db.query(models.Menu).filter(models.Menu.menu_date == booking.booking_date).first()
 
     if not menu:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"The menu for {booking.booking_date} has not been set yet. "
-                   f"Booking is not available."
+            detail=f"The menu for {booking.booking_date} has not been set yet. Booking is not available."
         )
 
     # ------------------------------
     #   PART 3: Validation Logic
     # ------------------------------
-    # Validate lunch picks
     if booking.lunch_pick:
-        if not set(booking.lunch_pick).issubset(set(menu["lunch_options"])):
+        if not set(booking.lunch_pick).issubset(set(menu.lunch_options)):       # type: ignore
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="One or more of your lunch picks are not valid options on this day."
             )
 
-    # Validate dinner picks
     if booking.dinner_pick:
-        if not set(booking.dinner_pick).issubset(set(menu["dinner_options"])):
+        if not set(booking.dinner_pick).issubset(set(menu.dinner_options)):     # type: ignore
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="One or more of your dinner picks are not valid options on this day."
@@ -118,282 +102,226 @@ def create_or_update_booking(
     # ------------------------------
     #   PART 4: UPSERT (Insert or Update)
     # ------------------------------
-    query = """
-        INSERT INTO meal_bookings (user_id, booking_date, lunch_pick, dinner_pick)
-        VALUES (%(user_id)s, %(booking_date)s, %(lunch_pick)s, %(dinner_pick)s)
-        ON CONFLICT (user_id, booking_date) DO UPDATE SET
-            lunch_pick = EXCLUDED.lunch_pick,
-            dinner_pick = EXCLUDED.dinner_pick
-        RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
-    """
+    db_booking = db.query(models.Booking).filter(
+        models.Booking.user_id == current_user.id,
+        models.Booking.booking_date == booking.booking_date
+    ).first()
 
-    params = booking.model_dump()
-    params["user_id"] = current_user["id"]
-
-    with conn.cursor() as cur:
-        try:
-            cur.execute(query, params)
-            new_booking = cur.fetchone()
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error: {e}"
+    try:
+        if db_booking:
+            db_booking.lunch_pick = booking.lunch_pick      # type: ignore
+            db_booking.dinner_pick = booking.dinner_pick    # type: ignore
+        else:
+            db_booking = models.Booking(
+                user_id=current_user.id,
+                booking_date=booking.booking_date,
+                lunch_pick=booking.lunch_pick,
+                dinner_pick=booking.dinner_pick
             )
+            db.add(db_booking)
+            
+        db.commit()
+        db.refresh(db_booking)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {e}"
+        )
 
-    return new_booking
-
+    return db_booking
 
 #-------------------------------------------------------CREATE A BOOKING----------------------------------------------------#
 @router.post("/book", status_code=status.HTTP_201_CREATED, response_model=schemas.MealBookingOut)
-def create_booking(booking: schemas.MealBookingCreate, conn=Depends(get_db_connection), current_user: dict = Depends(oauth2.get_current_user)):
-    #Check mess is off or not
-    if not current_user['is_mess_active']:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,detail="Your Mess is off!! Please contact mess committee")
+def create_booking(booking: schemas.MealBookingCreate, db: Session = Depends(get_db), current_user: models.User = Depends(oauth2.get_current_user)):
     
-
-    #CHECK FOR time logic
+    if not current_user.is_mess_active: # type: ignore
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your Mess is off!! Please contact mess committee")
+    
     validate_booking_time(booking.booking_date)
 
-    # RULE: CAN'T BOOK FOR LUNCH AFTER 7 AM
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
     if booking.booking_date == today_ist and now_ist.hour >= LUNCH_CUTOFF_HOUR and booking.lunch_pick:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST.")
-
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST.")
 
     # --- Part 1: Validation ---
-    # Get the official menu for the requested date to validate against.
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM daily_menus WHERE menu_date = %s", (booking.booking_date,))
-        menu = cur.fetchone()
+    menu = db.query(models.Menu).filter(models.Menu.menu_date == booking.booking_date).first()
 
     if not menu:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"The menu for {booking.booking_date} has not been set yet. Booking is not available.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"The menu for {booking.booking_date} has not been set yet. Booking is not available.")
 
     # --- VALIDATION LOGIC ---
-    # Check if every item in the user's lunch pick list is a valid menu option.
-    if booking.lunch_pick and not set(booking.lunch_pick).issubset(set(menu['lunch_options'])):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"One or more of your lunch picks are not valid options on this day.")
+    if booking.lunch_pick and not set(booking.lunch_pick).issubset(set(menu.lunch_options)): # type: ignore
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more of your lunch picks are not valid options on this day.")
 
-
-    # Check if every item in the user's dinner pick list is a valid menu option.
-    if booking.dinner_pick and not set(booking.dinner_pick).issubset(set(menu['dinner_options'])):
-         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"One or more of your dinner picks are not valid options on this day.")
-
+    if booking.dinner_pick and not set(booking.dinner_pick).issubset(set(menu.dinner_options)): # type: ignore
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more of your dinner picks are not valid options on this day.")
 
     # --- Part 2: The "INSERT" Query ---
-    # This query is now a simple INSERT, not an UPSERT.
-    # It will fail with a unique_violation error if a booking already exists.
-    query = """
-        INSERT INTO meal_bookings (user_id, booking_date, lunch_pick, dinner_pick)
-        VALUES (%(user_id)s, %(booking_date)s, %(lunch_pick)s, %(dinner_pick)s)
-        RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
-    """
-    
-    params = booking.model_dump()
-    params['user_id'] = current_user['id']
+    new_booking = models.Booking(
+        user_id=current_user.id,
+        booking_date=booking.booking_date,
+        lunch_pick=booking.lunch_pick,
+        dinner_pick=booking.dinner_pick
+    )
 
-    with conn.cursor() as cur:
-        try:
-            cur.execute(query, params)
-            new_booking = cur.fetchone()
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            # Check if the error is a 'unique_violation' (pgcode 23505)
-            if hasattr(e, 'pgcode') and e.pgcode == '23505': # type: ignore
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"A booking for {booking.booking_date} already exists. Please use the 'update' endpoints to make changes."
-                )
-            # For any other database error
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
+    try:
+        db.add(new_booking)
+        db.commit()
+        db.refresh(new_booking)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A booking for {booking.booking_date} already exists. Please use the 'update' endpoints to make changes."
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
 
     return new_booking
 
 #-----------------------------------------------------GET MY BOOKINGS-------------------------------------------------------#
-@router.get("/me",response_model=List[schemas.MyBookingHistoryItem])
-def get_my_bookings(conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
-    user_id = current_user['id']
-    query = "SELECT booking_date,lunch_pick, dinner_pick,created_at FROM meal_bookings WHERE user_id = %s ORDER BY booking_date DESC;"
+@router.get("/me", response_model=List[schemas.MyBookingHistoryItem])
+def get_my_bookings(db: Session = Depends(get_db), current_user: models.User = Depends(oauth2.get_current_user)):
     
-    with conn.cursor() as c:
-        c.execute(query,(user_id,))
-        meal_history = c.fetchall()
+    meal_history = db.query(models.Booking).filter(
+        models.Booking.user_id == current_user.id
+    ).order_by(models.Booking.booking_date.desc()).all()
 
     if not meal_history:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="You have no bookings!")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="You have no bookings!")
     
     return meal_history
 
-
-
-
 #-----------------------------------------------------DELETE BOOKING----------------------------------------------------------#
-@router.delete("/{booking_date}",status_code=status.HTTP_204_NO_CONTENT)
-def delete_booking(booking_date: date, conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
-    #check the time logic
+@router.delete("/{booking_date}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_booking(booking_date: date, db: Session = Depends(get_db), current_user: models.User = Depends(oauth2.get_current_user)):
+    
     validate_booking_time(booking_date=booking_date)
 
+    db_booking = db.query(models.Booking).filter(
+        models.Booking.user_id == current_user.id,
+        models.Booking.booking_date == booking_date
+    ).first()
 
-    query = "DELETE FROM meal_bookings WHERE user_id=%s AND booking_date = %s"
+    if not db_booking:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"You do not have a booking for {booking_date} to cancel.")
 
-    with conn.cursor() as c:
-        try:
-            c.execute(query,(current_user['id'],booking_date))
-            # Check if a row was actually deleted.
-            # If rowcount is 0, it means no booking existed for that user and date.
-            if c.rowcount == 0:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail=f"You do not have a booking for {booking_date} to cancel.")
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Database Error : {e}")
+    try:
+        db.delete(db_booking)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database Error : {e}")
         
-        # Return a 204 No Content response on successful deletion.
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
     
-
 #-----------------------------------------------------UPDATE LUNCH BOOKINGS------------------------------------------------------#
-@router.patch("/update-lunch",status_code=status.HTTP_200_OK,response_model=schemas.MealBookingOut)
-def update_Lunch(booking:schemas.LunchUpdate, conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
-    # This validates Rules 1, 2, and 3 (past dates, 6 PM cutoff, 9 PM window)
+@router.patch("/update-lunch", status_code=status.HTTP_200_OK, response_model=schemas.MealBookingOut)
+def update_Lunch(booking: schemas.LunchUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(oauth2.get_current_user)):
+    
     validate_booking_time(booking.booking_date)
 
-    # RULE: CAN'T BOOK FOR LUNCH AFTER 7 AM
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
     if booking.booking_date == today_ist and now_ist.hour >= LUNCH_CUTOFF_HOUR:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Cannot book lunch for today after {LUNCH_CUTOFF_HOUR}:00 IST.")
     
-
     #----------Menu Validation-----------
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM daily_menus WHERE menu_date = %s", (booking.booking_date,))
-        menu = cur.fetchone()
+    menu = db.query(models.Menu).filter(models.Menu.menu_date == booking.booking_date).first()
 
     if not menu:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"The menu for {booking.booking_date} has not been set yet.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"The menu for {booking.booking_date} has not been set yet.")
 
-    # Check if the new lunch pick is valid
-    if booking.lunch_pick and not set(booking.lunch_pick).issubset(set(menu['lunch_options'])):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"One or more of your lunch picks are not valid options on this day.")
+    if booking.lunch_pick and not set(booking.lunch_pick).issubset(set(menu.lunch_options)):        # type: ignore
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more of your lunch picks are not valid options on this day.")
     
+    db_booking = db.query(models.Booking).filter(
+        models.Booking.user_id == current_user.id,
+        models.Booking.booking_date == booking.booking_date
+    ).first()
 
-    user_id = current_user['id']
+    if not db_booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No booking found for user {current_user.id} on {booking.booking_date}"
+        )
 
-    query = """UPDATE meal_bookings SET lunch_pick = %s WHERE user_id = %s AND booking_date = %s
-            RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
-            """
-    
-    with conn.cursor() as cur:
-        try:
-            cur.execute(query,(booking.lunch_pick,user_id,booking.booking_date))
-            updated_booking = cur.fetchone()
-
-            if not updated_booking:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No booking found for user {user_id} on {booking.booking_date}"
-                )
-            conn.commit()
-
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
+    try:
+        db_booking.lunch_pick = booking.lunch_pick      # type: ignore
+        db.commit()
+        db.refresh(db_booking)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
         
-    return updated_booking
+    return db_booking
     
-
 #-----------------------------------------------------UPDATE DINNER BOOKINGS------------------------------------------------------#
-@router.patch("/update-dinner",status_code=status.HTTP_200_OK,response_model=schemas.MealBookingOut)
-def update_Dinner(booking:schemas.DinnerUpdate, conn = Depends(get_db_connection),current_user: dict = Depends(oauth2.get_current_user)):
-    #CHECK FOR time logic
+@router.patch("/update-dinner", status_code=status.HTTP_200_OK, response_model=schemas.MealBookingOut)
+def update_Dinner(booking: schemas.DinnerUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(oauth2.get_current_user)):
+    
     validate_booking_time(booking.booking_date)
     
-    # RULE: CAN'T BOOK FOR Dinner AFTER 6 PM
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
     #----------Menu Validation-----------
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM daily_menus WHERE menu_date = %s", (booking.booking_date,))
-        menu = cur.fetchone()
+    menu = db.query(models.Menu).filter(models.Menu.menu_date == booking.booking_date).first()
 
     if not menu:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail=f"The menu for {booking.booking_date} has not been set yet.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"The menu for {booking.booking_date} has not been set yet.")
 
-    # Check if the new lunch pick is valid
-    if booking.dinner_pick and not set(booking.dinner_pick).issubset(set(menu['dinner_options'])):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"One or more of your dinner picks are not valid options on this day.")
+    if booking.dinner_pick and not set(booking.dinner_pick).issubset(set(menu.dinner_options)):     # type: ignore
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="One or more of your dinner picks are not valid options on this day.")
     
     if booking.booking_date == today_ist and now_ist.hour >= TODAY_CUTOFF_HOUR:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail=f"Cannot book dinner for today after {TODAY_CUTOFF_HOUR}:00 IST.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Cannot book dinner for today after {TODAY_CUTOFF_HOUR}:00 IST.")
     
+    db_booking = db.query(models.Booking).filter(
+        models.Booking.user_id == current_user.id,
+        models.Booking.booking_date == booking.booking_date
+    ).first()
 
-    user_id = current_user['id']
+    if not db_booking:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No booking found for user {current_user.id} on {booking.booking_date}"
+        )
 
-    query = """UPDATE meal_bookings SET dinner_pick = %s WHERE user_id = %s AND booking_date = %s
-            RETURNING id, user_id, booking_date, lunch_pick, dinner_pick, created_at;
-            """
-    
-    with conn.cursor() as cur:
-        try:
-            cur.execute(query,(booking.dinner_pick,user_id,booking.booking_date))
-            updated_booking = cur.fetchone()
-
-            if not updated_booking:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No booking found for user {user_id} on {booking.booking_date}"
-                )
-            
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
+    try:
+        db_booking.dinner_pick = booking.dinner_pick        # type: ignore
+        db.commit()
+        db.refresh(db_booking)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e}")
         
-        return updated_booking
-
+    return db_booking
 
 #----------------------------------------------------Wake Up Convenor------------------------------------------------------#
 @router.post("/wake-convenor", status_code=status.HTTP_200_OK)
 def wake_up_convenor(
     background_tasks: BackgroundTasks,
-    conn = Depends(get_db_connection),
-    current_user: dict = Depends(oauth2.get_current_user)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(oauth2.get_current_user)
 ):
     now_ist = datetime.now(IST)
     today_ist = now_ist.date()
 
     try:
         # ---------------- Cursor 1: Cooldown check (lock row) ----------------
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT last_triggered_at
-                FROM system_cooldowns
-                WHERE task_name = 'wake_convenor'
-                FOR UPDATE
-            """)
-            row = cur.fetchone()
-            last_called = row['last_triggered_at']
+        cooldown = db.query(models.Cooldown).filter(
+            models.Cooldown.task_name == 'wake_convenor'
+        ).with_for_update().first()
 
-            if now_ist - last_called < timedelta(minutes=1):
-                conn.rollback()
+        if cooldown and cooldown.last_triggered_at:     # type: ignore
+            if now_ist - cooldown.last_triggered_at < timedelta(minutes=1):     # type: ignore
+                db.rollback()
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Convenors recently notified. Please wait a moment."
@@ -402,43 +330,32 @@ def wake_up_convenor(
         # ---------------- Cursor 2: Menu check ----------------
         target_date = today_ist + timedelta(days=1) if now_ist.hour >= 21 else today_ist
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM daily_menus WHERE menu_date = %s",
-                (target_date,)
+        menu_exists = db.query(models.Menu).filter(models.Menu.menu_date == target_date).first()
+        
+        if menu_exists:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Menu is already set for the date."
             )
-            if cur.fetchone():
-                conn.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Menu is already set for the date."
-                )
 
         # ---------------- Cursor 3: Update cooldown ----------------
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE system_cooldowns
-                SET last_triggered_at = %s
-                WHERE task_name = 'wake_convenor'
-                """,
-                (now_ist,)
-            )
+        if cooldown:
+            cooldown.last_triggered_at = now_ist        # type: ignore
+        else:
+            new_cooldown = models.Cooldown(task_name='wake_convenor', last_triggered_at=now_ist)
+            db.add(new_cooldown)
 
         # ---------------- Cursor 4: Fetch convenors ----------------
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, push_token FROM users WHERE role = 'convenor'"
-            )
-            convenors = cur.fetchall()
+        convenors = db.query(models.User).filter(models.User.role == 'convenor').all()
 
         # Commit only after ALL DB steps succeed
-        conn.commit()
+        db.commit()
 
     except HTTPException:
         raise
     except Exception as e:
-        conn.rollback()
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error: {str(e)}"
@@ -451,16 +368,20 @@ def wake_up_convenor(
             detail="No convenors found."
         )
 
-    tokens = [c['push_token'] for c in convenors if c['push_token']]
+    # Convert to standard strings to avoid DetachedInstanceError in background thread
+    tokens = [str(c.push_token) for c in convenors if c.push_token]     # type: ignore
+    caller_name = str(current_user.name)
+    convenor_names = [str(c.name) for c in convenors]
+
     if tokens:
         background_tasks.add_task(
             fcm_manager.send_notification,
             tokens,
             "Urgent: Menu Call",
-            f"{current_user['name']} is asking for the menu!"
+            f"{caller_name} is asking for the menu!"
         )
         
     return {
         "message": "Notifications sent",
-        "convenors": [c["name"] for c in convenors]
+        "convenors": convenor_names
     }
