@@ -1,8 +1,8 @@
-"""baseline setup
+"""add_issue_ticket_table
 
-Revision ID: 6d482b4414eb
-Revises: 
-Create Date: 2026-07-27 01:11:37.154926
+Revision ID: 645816e9f0c6
+Revises: 3f79787c9fea
+Create Date: 2026-07-27 01:27:32.136353
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '6d482b4414eb'
-down_revision: Union[str, Sequence[str], None] = None
+revision: str = '645816e9f0c6'
+down_revision: Union[str, Sequence[str], None] = '3f79787c9fea'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
