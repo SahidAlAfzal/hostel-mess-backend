@@ -3,10 +3,10 @@ from datetime import datetime,timedelta,timezone
 from fastapi import Depends,HTTPException,status
 from typing import Optional
 from . import schemas
-from database import get_db
+from .database import get_db
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-import models
+from . import models
 import os
 
 # This creates a dependency that will look for the token in the request's "Authorization" header
