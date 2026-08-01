@@ -53,4 +53,4 @@ jobs:
         DATABASE_URL: postgresql://postgres:password@localhost:5432/messbook_test
       run: |
         alembic upgrade head
-        pytest tests/
+        python -m pytest tests/
