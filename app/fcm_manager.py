@@ -1,181 +1,153 @@
+import logging
+import os
+
 import firebase_admin
 from firebase_admin import credentials, messaging
-import os
-from . import database # Import the database module to access the pool
-from fastapi.concurrency import run_in_threadpool # Import this for async safety
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.orm import Session
+
+from .models import User
+
+logger = logging.getLogger(__name__)
 
 # --- FCM Initialization ---
-# This code runs once when the app starts
 cred_path = "/etc/secrets/firebase-credentials.json"
+_firebase_ready = False
+
 if os.path.exists(cred_path):
     try:
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
-        print("Firebase Admin SDK initialized successfully.")
+        _firebase_ready = True
+        logger.info("Firebase Admin SDK initialized successfully.")
     except Exception as e:
-        print(f"FATAL: Firebase Admin SDK failed to initialize: {e}")
+        logger.error(f"FATAL: Firebase Admin SDK failed to initialize: {e}")
 else:
-    print("WARNING: Firebase credentials file not found. Push notifications will be disabled.")
+    logger.warning("Firebase credentials file not found. Push notifications disabled.")
 
 
-def get_all_user_tokens(conn) -> list[str]:
+def get_all_user_tokens(db: Session) -> list[str]:
     """
-    Helper function to get all valid push tokens from the database.
-    This function is run in a threadpool.
+    Fetch all active user tokens using SQLAlchemy ORM.
+    Sync/blocking — always call via run_in_threadpool from async code.
     """
-    with conn.cursor() as cur:
-        # --- FIX: Query the correct table (users) and column (push_token) ---
-        cur.execute("SELECT push_token FROM users WHERE push_token IS NOT NULL AND push_token != '' AND is_active = TRUE AND is_mess_active = TRUE")
-        results = cur.fetchall()
-        
-    return [row['push_token'] for row in results]
+    results = db.query(User.push_token).filter(
+        User.push_token.isnot(None),
+        User.push_token != '',
+        User.is_active == True,
+        User.is_mess_active == True
+    ).all()
+
+    return [row[0] for row in results]
 
 
-async def send_notification_to_all(title: str, body: str):
+def deactivate_invalid_tokens(db: Session, invalid_tokens: list[str]) -> int:
     """
-    The main function we will call to send a notification to all users.
-    This implementation prefers messaging.send_multicast (with 500-token chunks),
-    and falls back to sending one-by-one with messaging.send if send_multicast/send_all
-    are not available in the installed firebase_admin version.
-    """
-    if not firebase_admin._apps:
-        print("FCM Error: Firebase app not initialized. Cannot send notification.")
-        return
+    Clears push_token for users whose FCM token is no longer valid
+    (app uninstalled, token expired/rotated, etc.).
+    Sync/blocking — always call via run_in_threadpool from async code.
 
-    conn = None # Initialize conn to None
+    NOTE: this commits the transaction itself. If the caller manages its
+    own transaction/session lifecycle, remove the db.commit() call here
+    and let the caller commit instead.
+
+    Returns the number of rows updated.
+    """
+    if not invalid_tokens:
+        return 0
+
+    updated = db.query(User).filter(
+        User.push_token.in_(invalid_tokens)
+    ).update({User.push_token: None}, synchronize_session=False)
+    db.commit()
+    return updated
+
+
+# --- 1. Broadcast Notification (Broadcast to Everyone) ---
+async def send_notification_to_all(db: Session, title: str, body: str) -> dict:
+    """
+    Used for general announcements (e.g., new notices, updated menus).
+    Takes a DB session to query all active tokens.
+    """
+    if not _firebase_ready:
+        logger.error("FCM Error: Firebase app not initialized.")
+        return {"success": 0, "failure": 0, "invalid_tokens": []}
+
     try:
-        # --- FIX: Get connection directly from the pool ---
-        conn = database.pool.getconn() # type: ignore
-        # --- FIX: Set the cursor factory ---
-        conn.cursor_factory = database.RealDictCursor # type: ignore
-        
-        # Run the synchronous database call in a thread pool to avoid blocking
-        push_tokens = await run_in_threadpool(get_all_user_tokens, conn)
+        push_tokens = await run_in_threadpool(get_all_user_tokens, db)
     except Exception as e:
-        print(f"Error getting push tokens from database: {e}")
-        return
-    finally:
-        if conn:
-            database.pool.putconn(conn) # type: ignore
+        logger.error(f"Database error fetching tokens: {e}")
+        return {"success": 0, "failure": 0, "invalid_tokens": []}
 
     if not push_tokens:
-        print("Notification task ran, but no users are registered for notifications.")
-        return
+        logger.info("No user tokens found for broadcast.")
+        return {"success": 0, "failure": 0, "invalid_tokens": []}
 
-    # FCM limits multicast to 500 tokens per request
-    MAX_TOKENS_PER_BATCH = 500
+    result = await send_notification(push_tokens, title, body)
 
-    success_count = 0
-    failure_count = 0
+    # Prune any tokens FCM reports as dead so we stop wasting sends on them.
+    if result.get("invalid_tokens"):
+        try:
+            await run_in_threadpool(deactivate_invalid_tokens, db, result["invalid_tokens"])
+        except Exception as e:
+            logger.error(f"Failed to deactivate invalid tokens: {e}")
 
-    # Chunk tokens and send
-    def chunked(iterable, size):
-        for i in range(0, len(iterable), size):
-            yield iterable[i:i + size]
-
-    try:
-        if hasattr(messaging, "send_multicast"):
-            # Use send_multicast in chunks of up to 500 tokens
-            for chunk in chunked(push_tokens, MAX_TOKENS_PER_BATCH):
-                multicast = messaging.MulticastMessage(
-                    notification=messaging.Notification(title=title, body=body),
-                    tokens=chunk
-                )
-                resp = await run_in_threadpool(messaging.send_multicast, multicast) # type: ignore
-                success_count += getattr(resp, "success_count", 0)
-                failure_count += getattr(resp, "failure_count", 0)
-                # Log individual failures if present
-                for idx, r in enumerate(getattr(resp, "responses", [])):
-                    if not getattr(r, "success", False):
-                        print(f"Failed for token {chunk[idx]}: {getattr(r, 'exception', None)}")
-        else:
-            # Fallback: send messages one-by-one
-            for chunk in chunked(push_tokens, MAX_TOKENS_PER_BATCH):
-                for token in chunk:
-                    message = messaging.Message(
-                        notification=messaging.Notification(title=title, body=body),
-                        token=token
-                    )
-                    try:
-                        await run_in_threadpool(messaging.send, message)
-                        success_count += 1
-                    except Exception as e:
-                        failure_count += 1
-                        print(f"Failed for token {token}: {e}")
-
-        print(f"Successfully sent notification to {success_count} users.")
-        if failure_count > 0:
-            print(f"Failed to send to {failure_count} users.")
-    except Exception as e:
-        print(f"FATAL: Error sending FCM notifications: {e}")
+    return result
 
 
-
-#---------------------------------------Send notification to specific tokens------------------------------------------#
-async def send_notification(tokens: list[str], title: str, body: str):
+# --- 2. Targeted Notification (Specific User / Device Tokens) ---
+async def send_notification(tokens: list[str], title: str, body: str) -> dict:
     """
-    Send a notification to specific users by their push tokens.
+    Used for individual/targeted alerts (e.g., 'Booking Confirmed').
+    Does NOT require a DB session because tokens are passed in directly.
+
+    Returns:
+        {
+            "success": int,
+            "failure": int,
+            "invalid_tokens": list[str],  # tokens FCM reports as dead/unregistered
+        }
     """
-    if not firebase_admin._apps:
-        print("FCM Error: Firebase app not initialized. Cannot send notification.")
-        return
+    if not _firebase_ready:
+        logger.error("FCM Error: Firebase app not initialized.")
+        return {"success": 0, "failure": len(tokens), "invalid_tokens": []}
 
     if not tokens:
-        print("No tokens provided for notification.")
-        return
+        logger.info("No tokens provided for notification.")
+        return {"success": 0, "failure": 0, "invalid_tokens": []}
 
-    # FCM limits multicast to 500 tokens per request
     MAX_TOKENS_PER_BATCH = 500
-
     success_count = 0
     failure_count = 0
+    invalid_tokens: list[str] = []
 
     def chunked(iterable, size):
         for i in range(0, len(iterable), size):
             yield iterable[i:i + size]
 
-    try:
-        if hasattr(messaging, "send_multicast"):
-            # Use send_multicast in chunks of up to 500 tokens
-            for chunk in chunked(tokens, MAX_TOKENS_PER_BATCH):
-                multicast = messaging.MulticastMessage(
-                    notification=messaging.Notification(title=title, body=body),
-                    tokens=chunk
-                )
-                resp = await run_in_threadpool(messaging.send_multicast, multicast) # type: ignore
-                success_count += getattr(resp, "success_count", 0)
-                failure_count += getattr(resp, "failure_count", 0)
-                # Log individual failures if present
-                for idx, r in enumerate(getattr(resp, "responses", [])):
-                    if not getattr(r, "success", False):
-                        print(f"Failed for token {chunk[idx]}: {getattr(r, 'exception', None)}")
-        else:
-            # Fallback: send messages one-by-one
-            for chunk in chunked(tokens, MAX_TOKENS_PER_BATCH):
-                for token in chunk:
-                    message = messaging.Message(
-                        notification=messaging.Notification(title=title, body=body),
-                        token=token
-                    )
-                    try:
-                        await run_in_threadpool(messaging.send, message)
-                        success_count += 1
-                    except Exception as e:
-                        failure_count += 1
-                        print(f"Failed for token {token}: {e}")
+    for chunk in chunked(tokens, MAX_TOKENS_PER_BATCH):
+        try:
+            multicast = messaging.MulticastMessage(
+                notification=messaging.Notification(title=title, body=body),
+                tokens=chunk
+            )
+            resp = await run_in_threadpool(messaging.send_each_for_multicast, multicast)
+            success_count += resp.success_count
+            failure_count += resp.failure_count
 
-        print(f"Successfully sent notification to {success_count} users.")
-        if failure_count > 0:
-            print(f"Failed to send to {failure_count} users.")
-            
-        return {"success": success_count, "failure": failure_count}
-    except Exception as e:
-        print(f"FATAL: Error sending FCM notifications: {e}")
-        return {"success": 0, "failure": len(tokens)}
-    
-def send_notification_bg(tokens: list[str], title: str, body: str):
-    """
-    Sync wrapper for BackgroundTasks.
-    """
-    import asyncio
-    asyncio.run(send_notification(tokens, title, body))
+            for token, single_resp in zip(chunk, resp.responses):
+                if not single_resp.success:
+                    exc = single_resp.exception
+                    logger.warning(f"FCM send failed for token {token}: {exc}")
+                    if isinstance(exc, messaging.UnregisteredError):
+                        invalid_tokens.append(token)
+
+        except Exception as e:
+            # This chunk failed outright (e.g. network/auth error). Count it
+            # as failed but keep the results already collected from chunks
+            # that succeeded, instead of discarding everything.
+            logger.error(f"FCM batch error for a chunk of {len(chunk)} tokens: {e}")
+            failure_count += len(chunk)
+
+    logger.info(f"Successfully sent notification to {success_count} users. Failed: {failure_count}")
+    return {"success": success_count, "failure": failure_count, "invalid_tokens": invalid_tokens}
